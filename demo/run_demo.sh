@@ -26,9 +26,9 @@ echo
 echo "=== PART 2: natural language (needs AGENT_LLM_API_KEY) ==="
 if [ -z "${AGENT_LLM_API_KEY:-}" ] && ! grep -qs '^AGENT_LLM_API_KEY=.' .env; then
   echo "SKIPPED: no API key set. Example (this terminal only):"
-  echo "  export AGENT_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/"
+  echo "  export AGENT_LLM_BASE_URL=https://api.groq.com/openai/v1"
   echo "  export AGENT_LLM_API_KEY=your-key"
-  echo "  export AGENT_LLM_MODEL=gemini-2.5-flash"
+  echo "  export AGENT_LLM_MODEL=openai/gpt-oss-120b"
   exit 0
 fi
 run agent "Audit the folder $DEMO and tell me what is wrong"

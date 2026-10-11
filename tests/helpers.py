@@ -3,6 +3,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -21,6 +22,13 @@ class TempTree(unittest.TestCase):
         os.environ["AGENT_ACTION_LOG"] = self.log
         self.tree = os.path.join(self.root, "tree")
         os.mkdir(self.tree)
+        # Tests must behave identically with or without a real terminal: force
+        # non-interactive mode, and fail loudly if anything ever tries to prompt.
+        patches = [mock.patch("inode_symlink_agent.safety.is_interactive", return_value=False),
+                   mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt"))]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def tearDown(self):
         if self._old_log is None:

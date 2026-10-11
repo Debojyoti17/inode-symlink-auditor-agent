@@ -142,10 +142,12 @@ class NaturalLanguageTests(TempTree):
 
 class _Handler(BaseHTTPRequestHandler):
     seen = []
+    headers_seen = []
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         _Handler.seen.append((self.path, self.headers.get("Authorization"), body))
+        _Handler.headers_seen.append(dict(self.headers))
         if body["model"] == "bad":
             self.send_response(401)
             self.end_headers()
@@ -172,6 +174,7 @@ class HttpClientTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def test_request_shape_and_response(self):
         c = llm.ChatClient(self.base, "sekret", "m1")
@@ -182,6 +185,18 @@ class HttpClientTests(unittest.TestCase):
         self.assertEqual(auth, "Bearer sekret")
         self.assertEqual(body["model"], "m1")
         self.assertEqual(body["tools"], [{"type": "function"}])
+
+    def test_explicit_user_agent_sent_on_every_request(self):
+        c = llm.ChatClient(self.base, "k", "m1")
+        c.chat([{"role": "user", "content": "one"}])
+        c.chat([{"role": "user", "content": "two"}])
+        for hdrs in _Handler.headers_seen[-2:]:
+            self.assertEqual(hdrs["User-Agent"], llm.USER_AGENT)
+            self.assertNotIn("Python-urllib", hdrs["User-Agent"])
+        # also on the error path
+        with self.assertRaises(llm.LLMError):
+            llm.ChatClient(self.base, "k", "bad").chat([])
+        self.assertEqual(_Handler.headers_seen[-1]["User-Agent"], llm.USER_AGENT)
 
     def test_http_error_message(self):
         with self.assertRaises(llm.LLMError) as cm:
