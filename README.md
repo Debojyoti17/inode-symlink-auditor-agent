@@ -110,7 +110,9 @@ agent10> now check my Desktop
 agent10> exit
 ```
 
-The conversation is remembered between turns, so follow-ups like "yes, delete them" or "now
+The conversation is remembered between turns (older turns are trimmed, but a small "session
+note" with the current folder, the last few actions and the items found is always sent), so
+follow-ups like "yes, delete them" or "now
 check my Desktop" work. Type `exit`, `quit` or press Ctrl+D to leave. The y/N question is
 asked by the program itself for every write, never by the LLM, so you always see the preview
 first.
