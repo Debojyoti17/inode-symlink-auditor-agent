@@ -432,6 +432,7 @@ def _write_flow(action, items, refused, apply_one, dry_run, confirm, auto_confir
         return res
     approved, why, shown = safety.ask_confirmation(text, confirm, auto_confirm)
     res["preview_shown"] = shown   # already printed at the y/N prompt
+    res["declined"] = why.startswith("declined")
     if not approved:
         res["status"], res["message"] = "not_confirmed", "Nothing was changed (%s)." % why
         safety.log_action(action, [i["description"] for i in items], "not confirmed: " + why)
