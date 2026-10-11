@@ -90,7 +90,7 @@ Get a key at <https://console.groq.com/keys>, then set it **for the current term
 export AGENT_LLM_BASE_URL="https://api.groq.com/openai/v1"
 export AGENT_LLM_API_KEY="paste-your-key-here"
 export AGENT_LLM_MODEL="openai/gpt-oss-120b"      # fallback: openai/gpt-oss-20b
-python3 -m inode_symlink_agent "find broken shortcuts on my desktop and delete them"
+python3 -m inode_symlink_agent          # chat mode (recommended)
 ```
 
 Model names change over time. To list the models your key can use right now:
@@ -98,6 +98,31 @@ Model names change over time. To list the models your key can use right now:
 ```bash
 curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $AGENT_LLM_API_KEY"
 ```
+
+**Chat mode (the main way to use and demo the agent).** Run with no arguments:
+
+```
+$ python3 -m inode_symlink_agent
+agent10> find the broken shortcuts in /tmp/agent10_demo/desktop
+agent10> delete them
+  (the program prints the exact preview and asks "Apply these changes? [y/N]")
+agent10> now check my Desktop
+agent10> exit
+```
+
+The conversation is remembered between turns, so follow-ups like "yes, delete them" or "now
+check my Desktop" work. Type `exit`, `quit` or press Ctrl+D to leave. The y/N question is
+asked by the program itself for every write, never by the LLM, so you always see the preview
+first.
+
+**One request at a time** also works, but a one-shot run cannot answer follow-up questions:
+
+```bash
+python3 -m inode_symlink_agent "find broken shortcuts on my desktop and delete them"
+```
+
+If the program is not run in a terminal (no way to ask y/N), writes are refused unless you
+add `--yes`.
 
 Or copy `.env.example` to `.env` and edit it (`.env` is git-ignored; real environment
 variables win over `.env`). Never commit a key.
@@ -135,6 +160,7 @@ writes without the y/N prompt.
 ```python
 from inode_symlink_agent import (AGENT_NAME, AGENT_DESCRIPTION,
                                  get_tool_schemas, call_tool, handle)
+from inode_symlink_agent.agent import new_history
 
 AGENT_NAME            # "inode_symlink_auditor"
 AGENT_DESCRIPTION     # paragraph for the router LLM, with example requests
@@ -151,6 +177,8 @@ reply = handle("audit my projects folder", confirm=my_confirm_callback)
 
 - `confirm(preview_text) -> bool` is called before any write. With neither `confirm` nor
   `auto_confirm=True`, a non-interactive caller never causes a write.
+- `handle(prompt, history=new_history())` keeps a conversation across calls (chat mode uses this);
+  without `history` each call is a fresh one-shot request.
 - `handle(..., client=obj)` accepts any object with `chat(messages, tools) -> message dict`,
   so the base shell can supply its own LLM client instead of this agent's urllib one.
 
