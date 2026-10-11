@@ -271,9 +271,8 @@ def _hard_groups(found):
     return groups
 
 
-HARDLINK_NOTE = ("Only names inside the scanned tree can be found. If names_outside_scan > 0, "
-                 "other names for that inode exist elsewhere on the filesystem; finding them "
-                 "needs a wider scan.")
+HARDLINK_NOTE = ("Only names inside the scanned tree are found; names_outside_scan counts other "
+                 "names elsewhere on the filesystem (a wider scan would be needed to find them).")
 
 
 # --------------------------------------------------------------------------- read-only tools

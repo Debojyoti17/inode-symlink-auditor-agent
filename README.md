@@ -142,6 +142,26 @@ variables win over `.env`). Never commit a key.
 The model must support tool calling. If a model name is rejected (HTTP 404), list the current
 models as shown above. The client sends an explicit `User-Agent` header because some
 providers' Cloudflare protection blocks Python's default one (HTTP 403, "error code: 1010").
+
+**Groq free-tier limits.** The free tier limits tokens per minute (for example 8000 TPM for
+`openai/gpt-oss-120b`). Every request carries the system prompt, the tool list and the chat
+history, roughly 2000 tokens or more, so several quick questions in a row can hit the limit.
+What the agent does about it:
+
+- On an HTTP 429 (rate limit) or 503 it waits as long as the server asks (from the
+  `Retry-After` header or the "try again in 17.5s" text), prints
+  `Rate limit reached, waiting 17.5s...` and retries, at most 3 times and at most about
+  60 seconds of waiting in total. If the server asks for longer, it stops with a clear message.
+- Requests are kept small: short prompt and tool descriptions, at most 50 list items sent to
+  the LLM (with a count of the rest; write previews and direct mode always show everything),
+  and chat mode remembers only the last 6 turns, keeping tool output for the latest 2.
+- A write request needs a single tool call (no extra dry run), and the program asks y/N itself.
+
+Tips: wait a few seconds between requests, and use `--verbose` (for example
+`python3 -m inode_symlink_agent --verbose`) to see the approximate number of tokens sent with
+each request, plus the API's own count when it reports one. Direct mode never uses the LLM
+and has no rate limit.
+
 With no key set, the agent says so and points you to direct mode. Add `--yes` to approve
 writes without the y/N prompt.
 

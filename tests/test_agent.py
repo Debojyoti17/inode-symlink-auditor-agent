@@ -10,6 +10,7 @@ from unittest import mock
 from helpers import TempTree
 import inode_symlink_agent as agent_pkg
 from inode_symlink_agent import __main__ as cli, agent, llm
+from inode_symlink_agent import tools as tools_mod
 
 
 def tool_call(name, args, cid="c1"):
@@ -106,11 +107,18 @@ class NaturalLanguageTests(TempTree):
 
     def test_system_prompt_rules(self):
         sp = agent.SYSTEM_PROMPT
+        low = sp.lower()
         self.assertIn("dry_run=false", sp)
-        self.assertIn("Never ask for confirmation in text", sp)
-        self.assertIn("no markdown", sp.lower())
-        self.assertIn("no code fences", sp.lower())
-        self.assertNotIn("Always preview", sp)
+        self.assertIn("ONCE", sp)
+        self.assertIn("do not dry-run first", low)
+        self.assertIn("never ask for confirmation in text", low)
+        self.assertIn("no markdown", low)
+        self.assertIn("code fences", low)
+
+    def test_prompt_and_schemas_stay_small(self):
+        """Regression guard for tiny per-minute token budgets (Groq free tier: 8000)."""
+        schemas = json.dumps(agent_pkg.get_tool_schemas(), separators=(",", ":"))
+        self.assertLess(len(schemas) + len(agent.SYSTEM_PROMPT), 7000)   # ~1.7k tokens
 
     def test_direct_delete_request_hits_the_yn_gate(self):
         """The model calls the write tool straight away; our own y/N prompt decides."""
@@ -254,30 +262,93 @@ class ChatModeTests(TempTree):
     def test_no_arguments_starts_chat(self):
         with mock.patch.object(cli, "run_chat", return_value=0) as rc:
             self.assertEqual(cli.main([]), 0)
-        rc.assert_called_once_with(auto_confirm=False)
+        rc.assert_called_once_with(auto_confirm=False, verbose=False)
 
-    def test_history_is_trimmed_by_whole_turns(self):
+    @staticmethod
+    def _turn(hist, i):
+        hist += [{"role": "user", "content": "q%d" % i},
+                 {"role": "assistant", "content": None, "tool_calls": [{"id": "x"}]},
+                 {"role": "tool", "tool_call_id": "x", "content": "result%d" % i},
+                 {"role": "assistant", "content": "a%d" % i}]
+
+    def test_history_keeps_only_last_turns(self):
         hist = agent.new_history()
-        for i in range(40):
-            hist += [{"role": "user", "content": "q%d" % i},
-                     {"role": "assistant", "content": None, "tool_calls": [{"id": "x"}]},
-                     {"role": "tool", "tool_call_id": "x", "content": "r"},
-                     {"role": "assistant", "content": "a%d" % i}]
+        for i in range(20):
+            self._turn(hist, i)
         agent._trim_history(hist)
-        self.assertLessEqual(len(hist), agent.MAX_HISTORY_MESSAGES)
+        users = [m["content"] for m in hist if m["role"] == "user"]
+        self.assertEqual(users, ["q%d" % i for i in range(20 - agent.HISTORY_TURNS_KEPT, 20)])
         self.assertEqual(hist[0]["role"], "system")
-        self.assertEqual(hist[1]["role"], "user")      # never starts mid-turn
-        self.assertEqual(hist[-1]["content"], "a39")
+        self.assertEqual(hist[1]["role"], "user")          # never starts mid-turn
+        self.assertEqual(hist[-1]["content"], "a19")
+
+    def test_old_tool_outputs_dropped_recent_kept(self):
+        hist = agent.new_history()
+        for i in range(5):
+            self._turn(hist, i)
+        agent._trim_history(hist)
+        tool_results = [m["content"] for m in hist if m["role"] == "tool"]
+        self.assertEqual(tool_results, ["result3", "result4"])   # only the latest 2 turns
+        self.assertEqual([m["content"] for m in hist if m["role"] == "user"],
+                         ["q%d" % i for i in range(5)])           # questions + answers stay
+        self.assertEqual(sum(1 for m in hist if m.get("tool_calls")), 2)
+        answers = [m["content"] for m in hist if m["role"] == "assistant" and m["content"]]
+        self.assertEqual(answers, ["a%d" % i for i in range(5)])
+
+    def test_chat_history_is_trimmed_during_a_long_session(self):
+        script = []
+        for i in range(10):
+            script += [tool_call("inode_usage", {"path": "/tmp"}, "c%d" % i), text("r%d" % i)]
+        client = FakeClient(*script)
+        hist = agent.new_history()
+        for i in range(10):
+            agent.handle("turn %d" % i, client=client, history=hist)
+        self.assertEqual(sum(1 for m in hist if m["role"] == "user"), agent.HISTORY_TURNS_KEPT)
+        self.assertEqual(sum(1 for m in hist if m["role"] == "tool"),
+                         agent.HISTORY_TOOL_TURNS_KEPT)
+
+    def test_tool_results_capped_for_llm_only(self):
+        for i in range(119):                                  # plus b1 from setUp = 120
+            self.link("gone%d" % i, "l%03d" % i)
+        full = tools_mod.find_broken_symlinks(self.tree)
+        self.assertEqual(len(full["broken_symlinks"]), 120)   # the user-side result is complete
+        client = FakeClient(tool_call("find_broken_symlinks", {"path": self.tree}), text("ok"))
+        agent.handle("find", client=client)
+        sent = json.loads(client.calls[-1][0][-1]["content"])
+        self.assertEqual(sent["count"], 120)                  # LLM still knows the total
+        self.assertEqual(len(sent["broken_symlinks"]), agent.MAX_ITEMS_TO_LLM + 1)
+        self.assertIn("70 more not shown", sent["broken_symlinks"][-1])
+
+    def test_compact_drops_duplicate_preview_text(self):
+        res = {"status": "dry_run", "preview_text": "x" * 500, "preview_shown": True,
+               "would_change": [{"description": "d"}] * 3}
+        out = agent._compact(res)
+        self.assertNotIn("preview_text", out)
+        self.assertNotIn("preview_shown", out)
+        self.assertEqual(len(out["would_change"]), 3)
+        self.assertLess(len(agent._encode(res)), 200)
 
 
 class _Handler(BaseHTTPRequestHandler):
     seen = []
     headers_seen = []
+    plans = {}          # model name -> list of (status, extra_headers, body) to serve first
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         _Handler.seen.append((self.path, self.headers.get("Authorization"), body))
         _Handler.headers_seen.append(dict(self.headers))
+        plan = _Handler.plans.get(body["model"])
+        if plan:
+            status, extra, text_body = plan.pop(0)
+            data = text_body.encode()
+            self.send_response(status)
+            for k, v in extra.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if body["model"] == "bad":
             self.send_response(401)
             self.end_headers()
@@ -327,6 +398,98 @@ class HttpClientTests(unittest.TestCase):
         with self.assertRaises(llm.LLMError):
             llm.ChatClient(self.base, "k", "bad").chat([])
         self.assertEqual(_Handler.headers_seen[-1]["User-Agent"], llm.USER_AGENT)
+
+    def client(self, model, **kw):
+        c = llm.ChatClient(self.base, "k", model, **kw)
+        c.sleeps, c.notes = [], []
+        c.sleep = c.sleeps.append
+        c.notify = c.notes.append
+        return c
+
+    GROQ_429 = ('{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in '
+                'organization `org_x` service tier `on_demand` on tokens per minute (TPM): '
+                'Limit 8000, Used 7110, Requested 3228. Please try again in 17.535s. Need '
+                'more tokens? Upgrade to Dev Tier today.","type":"tokens"}}')
+
+    def test_429_then_success_is_retried_using_text_wait(self):
+        _Handler.plans["rl1"] = [(429, {}, self.GROQ_429)]
+        c = self.client("rl1")
+        self.assertEqual(c.chat([])["content"], "hello")
+        self.assertEqual(c.sleeps, [18.035])
+        self.assertEqual(c.notes, ["Rate limit reached, waiting 18.0s..."])
+
+    def test_retry_after_header_wins(self):
+        _Handler.plans["rl2"] = [(429, {"Retry-After": "3"}, self.GROQ_429)]
+        c = self.client("rl2")
+        c.chat([])
+        self.assertEqual(c.sleeps, [3.5])
+
+    def test_503_is_retried_with_backoff(self):
+        _Handler.plans["rl3"] = [(503, {}, "busy"), (503, {}, "busy")]
+        c = self.client("rl3")
+        self.assertEqual(c.chat([])["content"], "hello")
+        self.assertEqual(c.sleeps, [2.5, 4.5])
+        self.assertIn("busy", c.notes[0])
+
+    def test_gives_up_after_three_retries(self):
+        _Handler.plans["rl4"] = [(429, {"Retry-After": "1"}, "x")] * 5
+        c = self.client("rl4")
+        with self.assertRaises(llm.LLMError) as cm:
+            c.chat([])
+        self.assertEqual(len(c.sleeps), 3)
+        self.assertIn("3 retries", str(cm.exception))
+        _Handler.plans["rl4"].clear()
+
+    def test_wait_longer_than_cap_is_not_attempted(self):
+        _Handler.plans["rl5"] = [(429, {}, "Please try again in 5m10s.")]
+        c = self.client("rl5")
+        with self.assertRaises(llm.LLMError) as cm:
+            c.chat([])
+        self.assertEqual(c.sleeps, [])
+        self.assertIn("longer than", str(cm.exception))
+        _Handler.plans["rl5"].clear()
+
+    def test_total_wait_is_capped(self):
+        _Handler.plans["rl6"] = [(429, {"Retry-After": "25"}, "x")] * 3
+        c = self.client("rl6")
+        with self.assertRaises(llm.LLMError):
+            c.chat([])
+        self.assertEqual(c.sleeps, [25.5, 25.5])      # a third wait would exceed 60s
+        _Handler.plans["rl6"].clear()
+
+    def test_other_errors_are_not_retried(self):
+        c = self.client("bad")
+        with self.assertRaises(llm.LLMError):
+            c.chat([])
+        self.assertEqual(c.sleeps, [])
+
+    def test_parse_wait_seconds(self):
+        p = llm.parse_wait_seconds
+        self.assertEqual(p(None, "Please try again in 17.535s."), 17.535)
+        self.assertEqual(p(None, "try again in 1m2.5s"), 62.5)
+        self.assertEqual(p(None, "Try again in 250ms"), 0.25)
+        self.assertEqual(p("5", "try again in 99s"), 5.0)
+        self.assertIsNone(p(None, "no hint here"))
+        self.assertIsNone(p("Wed, 21 Oct 2026 07:28:00 GMT", ""))
+
+    def test_verbose_prints_token_estimate(self):
+        err = io.StringIO()
+        c = llm.ChatClient(self.base, "k", "m1", verbose=True)
+        with mock.patch("sys.stderr", err):
+            c.chat([{"role": "user", "content": "x" * 400}])
+        self.assertRegex(err.getvalue(), r"\[llm\] request ~\d+ tokens")
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            llm.ChatClient(self.base, "k", "m1").chat([])
+        self.assertEqual(err.getvalue(), "")
+
+    def test_verbose_flag_reaches_the_client(self):
+        with mock.patch.dict(os.environ, {"AGENT_LLM_BASE_URL": self.base,
+                                          "AGENT_LLM_API_KEY": "k"}), \
+                mock.patch("inode_symlink_agent.llm.load_dotenv"):
+            self.assertTrue(llm.ChatClient.from_env(verbose=True).verbose)
+            self.assertFalse(llm.ChatClient.from_env().verbose)
+        self.assertTrue(cli._build_parser().parse_args(["--verbose"]).verbose)
 
     def test_http_error_message(self):
         with self.assertRaises(llm.LLMError) as cm:
