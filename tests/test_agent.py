@@ -269,6 +269,27 @@ class CliTests(TempTree):
         self.assertFalse(os.path.lexists(self.b))
         self.assertTrue(os.path.islink(self.p("pw")))
 
+    def test_preview_printed_once_at_interactive_prompt(self):
+        for answer, gone in (("n", False), ("y", True)):
+            link = self.link("gone", "again")
+            with mock.patch("inode_symlink_agent.safety.is_interactive", return_value=True), \
+                    mock.patch("builtins.input", return_value=answer):
+                code, out = self.run_cli("delete-broken", self.tree)
+            self.assertEqual(out.count("unlink " + link), 1, out)
+            self.assertEqual(out.count("unlink " + self.b), 1, out)
+            self.assertEqual(os.path.lexists(link), not gone)
+            if gone:
+                self.assertIn("done: " + link, out)
+            else:
+                self.assertIn("not_confirmed", out)
+            os.path.lexists(link) and os.unlink(link)
+            if not os.path.lexists(self.b):
+                self.b = self.link("gone", "b1")
+
+    def test_preview_printed_once_when_not_interactive(self):
+        code, out = self.run_cli("delete-broken", self.tree)
+        self.assertEqual(out.count("unlink " + self.b), 1, out)
+
     def test_multi_word_prompt_not_mistaken_for_command(self):
         self.assertFalse(cli._is_direct(["scan", "my", "desktop"]))
         self.assertTrue(cli._is_direct(["suspicious", "x", "--boundary", "y"]))
