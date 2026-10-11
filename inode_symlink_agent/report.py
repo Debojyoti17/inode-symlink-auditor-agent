@@ -106,13 +106,12 @@ def _audit(r):
 
 
 def _write(r):
-    lines = [r.get("preview_text", "")]
+    # The y/N prompt already printed the preview; don't show it twice.
+    lines = [""] if r.get("preview_shown") else [r.get("preview_text", ""), ""]
     if r.get("results"):
-        lines.append("")
         for x in r["results"]:
             lines.append("  %s %s%s" % ("done:" if x["done"] else "FAILED:", x["path"],
                                         "" if x["done"] else " (%s)" % x.get("reason", "")))
-    lines.append("")
     lines.append("[%s] %s" % (r.get("status", ""), r.get("message", "")))
     return lines
 
