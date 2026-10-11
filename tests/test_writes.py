@@ -94,6 +94,49 @@ class DeleteTests(TempTree):
         self.assertEqual(res["status"], "dry_run")
 
 
+class InteractivePromptTests(TempTree):
+    """The y/N path, with a simulated terminal and simulated typing."""
+
+    def ask(self, answer, interactive=True):
+        link = self.link("gone", "b")
+        with unittest.mock.patch("inode_symlink_agent.safety.is_interactive",
+                                 return_value=interactive), \
+                unittest.mock.patch("builtins.input", return_value=answer) as fake_input, \
+                unittest.mock.patch("builtins.print"):
+            res = tools.delete_broken_symlinks([link])
+        return link, res, fake_input
+
+    def test_yes_deletes(self):
+        for answer in ("y", "Y", " yes "):
+            link, res, fake_input = self.ask(answer)
+            self.assertEqual(res["status"], "done", answer)
+            self.assertFalse(os.path.lexists(link))
+            fake_input.assert_called_once()
+
+    def test_no_empty_and_garbage_keep_the_link(self):
+        for answer in ("n", "", "maybe"):
+            link, res, _ = self.ask(answer)
+            self.assertEqual(res["status"], "not_confirmed", answer)
+            self.assertTrue(os.path.islink(link))
+            os.unlink(link)
+
+    def test_eof_means_no(self):
+        link = self.link("gone", "b")
+        with unittest.mock.patch("inode_symlink_agent.safety.is_interactive",
+                                 return_value=True), \
+                unittest.mock.patch("builtins.input", side_effect=EOFError), \
+                unittest.mock.patch("builtins.print"):
+            res = tools.delete_broken_symlinks([link])
+        self.assertEqual(res["status"], "not_confirmed")
+        self.assertTrue(os.path.islink(link))
+
+    def test_non_interactive_never_asks(self):
+        link, res, fake_input = self.ask("y", interactive=False)
+        self.assertEqual(res["status"], "not_confirmed")
+        self.assertTrue(os.path.islink(link))
+        fake_input.assert_not_called()
+
+
 class CreateAndRepointTests(TempTree):
     def test_create_symlink(self):
         t = self.write("t.txt")

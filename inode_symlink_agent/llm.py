@@ -76,6 +76,8 @@ class ChatClient:
                 detail = exc.read().decode("utf-8", "replace")[:300]
             except Exception:
                 pass
+            finally:
+                exc.close()
             hints = {401: "the API key was rejected", 403: "access denied (check key/permissions)",
                      404: "endpoint or model not found (check AGENT_LLM_BASE_URL and "
                           "AGENT_LLM_MODEL)",
