@@ -3,6 +3,7 @@ import argparse
 import sys
 
 from . import agent, report, safety, tools
+from .llm import ChatClient, LLMNotConfigured
 
 COMMANDS = ("scan", "broken", "loops", "hardlinks", "inodes", "suspicious", "inspect",
             "delete-broken")
@@ -10,7 +11,10 @@ _VALUE_OPTS = ("--boundary", "--max-depth", "--max-entries")
 
 USAGE = """Inode & Symlink Auditor (Agent 10)
 
-Natural language (needs an LLM key, see README):
+Chat mode (needs an LLM key, see README):
+  python3 -m inode_symlink_agent             (type 'exit' to quit)
+
+Natural language, one request (needs an LLM key, see README):
   python3 -m inode_symlink_agent "find broken shortcuts on my desktop and delete them"
 
 Direct mode (no LLM needed):
@@ -36,7 +40,8 @@ def _is_direct(argv):
 
 
 def _build_parser():
-    p = argparse.ArgumentParser(prog="inode_symlink_agent", add_help=True,
+    p = argparse.ArgumentParser(prog="inode_symlink_agent", epilog=USAGE,
+                                formatter_class=argparse.RawDescriptionHelpFormatter,
                                 description="Inode & Symlink Auditor (Agent 10)")
     p.add_argument("words", nargs="*", help="a COMMAND and PATH, or a plain-English request")
     p.add_argument("--json", action="store_true", help="print JSON instead of a report")
@@ -101,20 +106,56 @@ def _delete_broken(a, path, kw):
     return 0 if res.get("ok") or res["status"] in ("dry_run", "not_confirmed") else 1
 
 
+def _trace(name, args):
+    print("[tool] %s %s" % (name, args), file=sys.stderr)
+
+
+def run_chat(client=None, input_fn=input, auto_confirm=False):
+    """Interactive loop. Conversation history is kept between turns; every write still
+    goes through the y/N confirmation gate."""
+    if client is None:
+        try:
+            client = ChatClient.from_env()
+        except LLMNotConfigured as exc:
+            print(exc)
+            return 1
+    try:
+        import readline  # noqa: F401  (gives arrow keys / history to input())
+    except ImportError:
+        pass
+    print("Inode & Symlink Auditor (Agent 10). Ask in plain English, e.g. 'find broken "
+          "shortcuts in ~/Desktop'.\nType 'exit' or press Ctrl+D to quit.")
+    history = agent.new_history()
+    while True:
+        try:
+            line = input_fn("agent10> ")
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            continue
+        line = line.strip()
+        if not line:
+            continue
+        if line.lower() in ("exit", "quit", ":q"):
+            return 0
+        try:
+            print(agent.handle(line, client=client, auto_confirm=auto_confirm,
+                               on_tool_call=_trace, history=history))
+        except KeyboardInterrupt:
+            print("\n(interrupted)")
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
-        print(USAGE)
-        return 2
     a = _build_parser().parse_args(argv)
     if not a.words:
-        print(USAGE)
-        return 2
+        return run_chat(auto_confirm=a.yes)
     if _is_direct(argv):
         return _direct(a)
     prompt = " ".join(a.words)
-    trace = lambda n, args: print("[tool] %s %s" % (n, args), file=sys.stderr)
-    print(agent.handle(prompt, auto_confirm=a.yes, on_tool_call=trace))
+    print(agent.handle(prompt, auto_confirm=a.yes, on_tool_call=_trace))
     return 0
 
 

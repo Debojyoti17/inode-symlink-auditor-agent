@@ -104,6 +104,27 @@ class NaturalLanguageTests(TempTree):
         tool_msg = client.calls[-1][0][-1]
         self.assertIn("not_confirmed", tool_msg["content"])
 
+    def test_system_prompt_rules(self):
+        sp = agent.SYSTEM_PROMPT
+        self.assertIn("dry_run=false", sp)
+        self.assertIn("Never ask for confirmation in text", sp)
+        self.assertIn("no markdown", sp.lower())
+        self.assertIn("no code fences", sp.lower())
+        self.assertNotIn("Always preview", sp)
+
+    def test_direct_delete_request_hits_the_yn_gate(self):
+        """The model calls the write tool straight away; our own y/N prompt decides."""
+        for answer, deleted in (("y", True), ("n", False)):
+            link = self.link("gone", "gate_%s" % answer)
+            client = FakeClient(tool_call("delete_broken_symlinks", {"paths": [link]}),
+                                text("ok"))
+            with mock.patch("inode_symlink_agent.safety.is_interactive", return_value=True), \
+                    mock.patch("builtins.input", return_value=answer) as fake_input, \
+                    mock.patch("builtins.print"):
+                agent.handle("delete the broken shortcuts", client=client)
+            fake_input.assert_called_once()
+            self.assertEqual(os.path.lexists(link), not deleted, answer)
+
     def test_declined(self):
         client = FakeClient(tool_call("delete_broken_symlinks", {"paths": [self.b]}), text("ok"))
         agent.handle("delete", client=client, confirm=lambda t: False)
@@ -138,6 +159,115 @@ class NaturalLanguageTests(TempTree):
                 reply = agent.handle("find broken links in ~")
         self.assertIn("No LLM API key", reply)
         self.assertIn("python3 -m inode_symlink_agent broken", reply)
+
+
+class ChatModeTests(TempTree):
+    def setUp(self):
+        super().setUp()
+        self.b = self.link("gone", "b1")
+
+    def chat(self, lines, client, **kw):
+        it = iter(lines)
+
+        def fake_input(prompt=""):
+            try:
+                return next(it)
+            except StopIteration:
+                raise EOFError
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch("sys.stderr", io.StringIO()):
+            code = cli.run_chat(client=client, input_fn=fake_input, **kw)
+        return code, buf.getvalue()
+
+    def test_history_kept_between_turns(self):
+        client = FakeClient(
+            tool_call("find_broken_symlinks", {"path": self.tree}), text("Found 1 broken link."),
+            text("Understood, nothing else to do."))
+        code, out = self.chat(["find broken links", "and what was that again?", "exit"], client)
+        self.assertEqual(code, 0)
+        self.assertIn("Found 1 broken link.", out)
+        turn2 = client.calls[2][0]                     # first request of the second turn
+        roles = [m["role"] for m in turn2]
+        self.assertEqual(roles, ["system", "user", "assistant", "tool", "assistant", "user"])
+        self.assertEqual(turn2[1]["content"], "find broken links")
+        self.assertIn(self.b, turn2[3]["content"])     # earlier tool result is visible
+        self.assertEqual(turn2[-1]["content"], "and what was that again?")
+
+    def test_followup_delete_uses_gate_in_chat(self):
+        client = FakeClient(
+            tool_call("find_broken_symlinks", {"path": self.tree}), text("One broken link: b1."),
+            tool_call("delete_broken_symlinks", {"paths": [self.b]}, "c2"), text("Deleted."))
+        with mock.patch("inode_symlink_agent.safety.is_interactive", return_value=True), \
+                mock.patch("builtins.input", return_value="y") as fake_input:
+            code, out = self.chat(["check", "yes, delete them", "quit"], client)
+        fake_input.assert_called_once()                # the y/N gate, not chat's own input_fn
+        self.assertFalse(os.path.lexists(self.b))
+        self.assertEqual(out.count("unlink " + self.b), 1)
+
+    def test_chat_still_never_writes_without_confirmation(self):
+        client = FakeClient(tool_call("delete_broken_symlinks", {"paths": [self.b]}),
+                            text("Not confirmed."))
+        self.chat(["delete them"], client)             # non-interactive, no --yes
+        self.assertTrue(os.path.islink(self.b))
+
+    def test_exit_quit_and_eof(self):
+        for lines in (["exit", "find broken links"], ["quit", "x"], ["EXIT", "x"], []):
+            client = FakeClient()                      # any model call would raise
+            code, out = self.chat(lines, client)       # [] = Ctrl+D (EOF) straight away
+            self.assertEqual(code, 0)
+            self.assertEqual(client.calls, [])
+
+    def test_blank_lines_ignored_and_banner_shown(self):
+        client = FakeClient()
+        code, out = self.chat(["", "   ", "exit"], client)
+        self.assertEqual(client.calls, [])
+        self.assertIn("exit", out)
+
+    def test_failed_turn_is_forgotten(self):
+        class Flaky:
+            def __init__(self):
+                self.n, self.sent = 0, []
+
+            def chat(self, messages, tools=None):
+                self.n += 1
+                self.sent.append(list(messages))
+                if self.n == 1:
+                    raise llm.LLMError("boom")
+                return text("fine")
+        client = Flaky()
+        code, out = self.chat(["first", "second", "exit"], client)
+        self.assertIn("boom", out)
+        self.assertIn("fine", out)
+        self.assertEqual([m["content"] for m in client.sent[1] if m["role"] == "user"],
+                         ["second"])
+
+    def test_no_api_key_message(self):
+        with mock.patch.dict(os.environ, {"AGENT_LLM_API_KEY": "",
+                                          "AGENT_LLM_BASE_URL": "https://example.invalid/v1"}), \
+                mock.patch("inode_symlink_agent.llm.load_dotenv"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = cli.run_chat(input_fn=lambda p="": "exit")
+        self.assertEqual(code, 1)
+        self.assertIn("No LLM API key", buf.getvalue())
+
+    def test_no_arguments_starts_chat(self):
+        with mock.patch.object(cli, "run_chat", return_value=0) as rc:
+            self.assertEqual(cli.main([]), 0)
+        rc.assert_called_once_with(auto_confirm=False)
+
+    def test_history_is_trimmed_by_whole_turns(self):
+        hist = agent.new_history()
+        for i in range(40):
+            hist += [{"role": "user", "content": "q%d" % i},
+                     {"role": "assistant", "content": None, "tool_calls": [{"id": "x"}]},
+                     {"role": "tool", "tool_call_id": "x", "content": "r"},
+                     {"role": "assistant", "content": "a%d" % i}]
+        agent._trim_history(hist)
+        self.assertLessEqual(len(hist), agent.MAX_HISTORY_MESSAGES)
+        self.assertEqual(hist[0]["role"], "system")
+        self.assertEqual(hist[1]["role"], "user")      # never starts mid-turn
+        self.assertEqual(hist[-1]["content"], "a39")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -268,6 +398,27 @@ class CliTests(TempTree):
         code, out = self.run_cli("delete-broken", self.tree, "--yes")
         self.assertFalse(os.path.lexists(self.b))
         self.assertTrue(os.path.islink(self.p("pw")))
+
+    def test_preview_printed_once_at_interactive_prompt(self):
+        for answer, gone in (("n", False), ("y", True)):
+            link = self.link("gone", "again")
+            with mock.patch("inode_symlink_agent.safety.is_interactive", return_value=True), \
+                    mock.patch("builtins.input", return_value=answer):
+                code, out = self.run_cli("delete-broken", self.tree)
+            self.assertEqual(out.count("unlink " + link), 1, out)
+            self.assertEqual(out.count("unlink " + self.b), 1, out)
+            self.assertEqual(os.path.lexists(link), not gone)
+            if gone:
+                self.assertIn("done: " + link, out)
+            else:
+                self.assertIn("not_confirmed", out)
+            os.path.lexists(link) and os.unlink(link)
+            if not os.path.lexists(self.b):
+                self.b = self.link("gone", "b1")
+
+    def test_preview_printed_once_when_not_interactive(self):
+        code, out = self.run_cli("delete-broken", self.tree)
+        self.assertEqual(out.count("unlink " + self.b), 1, out)
 
     def test_multi_word_prompt_not_mistaken_for_command(self):
         self.assertFalse(cli._is_direct(["scan", "my", "desktop"]))

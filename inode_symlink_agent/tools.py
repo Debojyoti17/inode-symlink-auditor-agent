@@ -431,7 +431,8 @@ def _write_flow(action, items, refused, apply_one, dry_run, confirm, auto_confir
         res["status"] = "dry_run"
         res["message"] = "Dry run: nothing was changed."
         return res
-    approved, why = safety.ask_confirmation(text, confirm, auto_confirm)
+    approved, why, shown = safety.ask_confirmation(text, confirm, auto_confirm)
+    res["preview_shown"] = shown   # already printed at the y/N prompt
     if not approved:
         res["status"], res["message"] = "not_confirmed", "Nothing was changed (%s)." % why
         safety.log_action(action, [i["description"] for i in items], "not confirmed: " + why)

@@ -153,19 +153,22 @@ def is_interactive():
 
 
 def ask_confirmation(preview_text, confirm=None, auto_confirm=False):
-    """Decide whether a write may go ahead. Returns (approved, reason).
+    """Decide whether a write may go ahead. Returns (approved, reason, preview_shown).
+
+    preview_shown is True when the preview was printed at an interactive prompt, so
+    callers can avoid printing it a second time.
 
     Order: auto_confirm=True -> yes; confirm callback -> its answer;
     interactive terminal -> ask y/N; otherwise NO (never write silently).
     """
     if auto_confirm:
-        return True, "auto-confirmed by caller"
+        return True, "auto-confirmed by caller", False
     if confirm is not None:
         try:
             ok = bool(confirm(preview_text))
         except Exception as exc:  # a broken callback must never allow a write
-            return False, "confirm callback failed: %s" % exc
-        return ok, "confirmed by callback" if ok else "declined by callback"
+            return False, "confirm callback failed: %s" % exc, False
+        return ok, "confirmed by callback" if ok else "declined by callback", False
     if is_interactive():
         print(preview_text)
         try:
@@ -173,9 +176,9 @@ def ask_confirmation(preview_text, confirm=None, auto_confirm=False):
         except EOFError:
             answer = ""
         ok = answer in ("y", "yes")
-        return ok, "confirmed at prompt" if ok else "declined at prompt"
+        return ok, "confirmed at prompt" if ok else "declined at prompt", True
     return False, ("no confirmation available: not an interactive terminal, and no confirm "
-                   "callback or auto_confirm was given")
+                   "callback or auto_confirm was given"), False
 
 
 def log_action(action, details, result):
