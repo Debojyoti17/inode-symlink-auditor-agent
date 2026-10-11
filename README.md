@@ -56,12 +56,16 @@ and the words `desktop`, `downloads`, `documents` are expanded to the matching h
 ## Setup on a fresh Ubuntu machine (copy-paste)
 
 ```bash
-git clone https://github.com/debojyoti17/inode-symlink-auditor-agent.git
+git clone https://github.com/Debojyoti17/inode-symlink-auditor-agent.git
 cd inode-symlink-auditor-agent
-git checkout claude/trusting-brown-7sulb1   # skip once this branch is merged into main
 python3 --version                           # needs 3.8 or newer
 python3 -m unittest discover -s tests -v    # run the tests (no network, no key needed)
 ```
+
+> **The repository is private.** On a shared lab PC, either clone over HTTPS and sign in with a
+> GitHub **personal access token** instead of your password (enter your GitHub username, then
+> paste the token when asked for a password; do not save it on a shared machine), or open the
+> repo on GitHub and use **Code → Download ZIP**, then run `unzip` on it and `cd` into the folder.
 
 ### Try it without an LLM (direct mode)
 
