@@ -82,13 +82,21 @@ Add `--json` for JSON output. Other options: `--no-recursive --max-depth N --max
 
 ### Natural-language mode (needs an LLM)
 
-Set the key **for the current terminal only** (nothing is saved to disk):
+**Recommended provider: Groq** (free tier, works with this agent's plain-urllib client).
+Get a key at <https://console.groq.com/keys>, then set it **for the current terminal only**
+(nothing is saved to disk):
 
 ```bash
-export AGENT_LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
+export AGENT_LLM_BASE_URL="https://api.groq.com/openai/v1"
 export AGENT_LLM_API_KEY="paste-your-key-here"
-export AGENT_LLM_MODEL="gemini-2.5-flash"
+export AGENT_LLM_MODEL="openai/gpt-oss-120b"      # fallback: openai/gpt-oss-20b
 python3 -m inode_symlink_agent "find broken shortcuts on my desktop and delete them"
+```
+
+Model names change over time. To list the models your key can use right now:
+
+```bash
+curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $AGENT_LLM_API_KEY"
 ```
 
 Or copy `.env.example` to `.env` and edit it (`.env` is git-ignored; real environment
@@ -96,15 +104,21 @@ variables win over `.env`). Never commit a key.
 
 | Provider | `AGENT_LLM_BASE_URL` | `AGENT_LLM_MODEL` (example) | Key |
 |---|---|---|---|
-| Google Gemini (free tier) | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | free key from <https://aistudio.google.com/apikey> |
-| Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | from console.groq.com |
+| **Groq (recommended)** | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` (fallback `openai/gpt-oss-20b`) | <https://console.groq.com/keys> |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | from platform.openai.com |
 | Ollama (local) | `http://localhost:11434/v1` | `llama3.1` (a tool-calling model) | any text, or empty for localhost |
+| Google Gemini (see warning) | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | Google AI Studio |
 
-Model names and free-tier limits change; the Gemini endpoint is from Google's "OpenAI
-compatibility" docs, and the model must support tool calling. If a model name is rejected
-(HTTP 404), check the provider's current model list. With no key set, the agent says so and
-points you to direct mode. Add `--yes` to approve writes without the y/N prompt.
+> **Gemini warning:** Google AI Studio now issues new keys that start with `AQ.`. In our
+> testing these fail on both the OpenAI-compatible endpoint ("Invalid Auth key") and Google's
+> native endpoint ("ACCESS_TOKEN_TYPE_UNSUPPORTED"). Gemini only works if you still have an
+> older `AIza...` API key; otherwise use Groq.
+
+The model must support tool calling. If a model name is rejected (HTTP 404), list the current
+models as shown above. The client sends an explicit `User-Agent` header because some
+providers' Cloudflare protection blocks Python's default one (HTTP 403, "error code: 1010").
+With no key set, the agent says so and points you to direct mode. Add `--yes` to approve
+writes without the y/N prompt.
 
 ### Demo and cleanup
 

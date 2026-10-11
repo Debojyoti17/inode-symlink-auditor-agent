@@ -7,6 +7,8 @@ import urllib.request
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+# Some providers (e.g. Groq behind Cloudflare) reject urllib's default "Python-urllib/x.y".
+USER_AGENT = "inode-symlink-auditor-agent/1.0"
 
 
 class LLMError(Exception):
@@ -66,6 +68,8 @@ class ChatClient:
         req = urllib.request.Request(
             self.base_url + "/chat/completions", data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json",
+                     "Accept": "application/json",
+                     "User-Agent": USER_AGENT,
                      "Authorization": "Bearer " + self.api_key}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
