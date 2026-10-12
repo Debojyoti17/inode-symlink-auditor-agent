@@ -33,7 +33,7 @@ You can also skip the LLM entirely with **direct mode** (see below).
 | `inode_usage` | read | total/used/free inodes and % used, like `df -i` |
 | `find_suspicious_symlinks` | read | links leaving a boundary directory, pointing at `/etc`, `/root`, `~/.ssh`…, or sitting in world-writable directories, with the reason |
 | `audit_summary` | read | one scan, counts of every issue type |
-| `delete_broken_symlinks` | **write** | unlinks only paths that are *still* symlinks and *still* broken at the moment of deletion; never a file or directory. (Loops are reported separately and not deleted by this tool.) |
+| `delete_broken_symlinks` | **write** | unlinks dead symlinks (target missing, or a symlink loop such as a self-link or A→B→A). Right before each unlink it re-checks that the path is *still* a symlink and *still* fails to resolve; never touches a working link, file or directory. The preview says why each link is removed |
 | `create_symlink`, `create_hard_link` | **write** | create a link |
 | `repoint_symlink` | **write** | change a link's target atomically (temp link + `os.replace`) |
 

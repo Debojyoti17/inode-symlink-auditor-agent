@@ -137,6 +137,80 @@ class InteractivePromptTests(TempTree):
         fake_input.assert_not_called()
 
 
+class DeleteLoopLinkTests(TempTree):
+    """Loop symlinks can never resolve, so they count as dead and may be deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.selfie = self.link("selfie", "selfie")          # self-link
+        self.a = self.link("b", "a")                         # two-link cycle a <-> b
+        self.b = self.link("a", "b")
+        self.missing = self.link("nowhere", "missing")       # ordinary dangling link
+
+    def test_deletes_self_link_and_two_link_cycle(self):
+        res = tools.delete_broken_symlinks([self.selfie, self.a, self.b], auto_confirm=True)
+        self.assertEqual(res["status"], "done")
+        for p in (self.selfie, self.a, self.b):
+            self.assertFalse(os.path.lexists(p), p)
+
+    def test_preview_says_why_each_link_is_removed(self):
+        res = tools.delete_broken_symlinks([self.selfie, self.a, self.missing], dry_run=True)
+        self.assertEqual(res["status"], "dry_run")
+        reasons = {os.path.basename(i["path"]): i["reason"] for i in res["would_change"]}
+        self.assertEqual(reasons, {"selfie": "symlink loop", "a": "symlink loop",
+                                   "missing": "target missing"})
+        self.assertIn("%s (-> selfie, symlink loop)" % self.selfie, res["preview_text"])
+        self.assertIn("%s (-> nowhere, target missing)" % self.missing, res["preview_text"])
+        self.assertTrue(all(os.path.islink(p) for p in (self.selfie, self.a, self.missing)))
+
+    def test_loop_deletion_still_needs_confirmation(self):
+        res = tools.delete_broken_symlinks([self.selfie])                  # non-interactive
+        self.assertEqual(res["status"], "not_confirmed")
+        self.assertTrue(os.path.islink(self.selfie))
+        res = tools.delete_broken_symlinks([self.selfie], confirm=lambda t: False)
+        self.assertTrue(res["declined"])
+        self.assertTrue(os.path.islink(self.selfie))
+
+    def test_loop_fixed_between_preview_and_unlink_is_kept(self):
+        def fix_the_loop_then_confirm(_text):
+            os.unlink(self.b)                  # b becomes a real file: a -> b now resolves
+            self.write("b", text="precious")
+            return True
+        res = tools.delete_broken_symlinks([self.a, self.b, self.selfie],
+                                           confirm=fix_the_loop_then_confirm)
+        self.assertEqual(res["status"], "partial")
+        self.assertTrue(os.path.islink(self.a))                            # works again: kept
+        with open(self.b) as fh:
+            self.assertEqual(fh.read(), "precious")                        # regular file: kept
+        self.assertFalse(os.path.lexists(self.selfie))                     # still a loop: gone
+        reasons = {os.path.basename(r["path"]): r["reason"]
+                   for r in res["results"] if not r["done"]}
+        self.assertIn("resolves now", reasons["a"])
+        self.assertIn("no longer a symlink", reasons["b"])
+
+    def test_loop_replaced_by_a_directory_is_kept(self):
+        def swap(_text):
+            os.unlink(self.selfie)
+            os.mkdir(self.selfie)
+            return True
+        tools.delete_broken_symlinks([self.selfie], confirm=swap)
+        self.assertTrue(os.path.isdir(self.selfie))
+
+    def test_working_links_files_and_directories_are_still_refused(self):
+        self.write("real.txt")
+        ok = self.link("real.txt", "fine")
+        os.mkdir(self.p("adir"))
+        res = tools.delete_broken_symlinks([ok, self.p("real.txt"), self.p("adir")],
+                                           auto_confirm=True)
+        self.assertEqual(res["status"], "refused")
+        self.assertTrue(os.path.islink(ok))
+        self.assertIn("still works", res["refused"][0]["reason"])
+
+    def test_loop_in_a_system_path_is_refused(self):
+        res = tools.delete_broken_symlinks(["/etc/agent10_no_such_loop"], auto_confirm=True)
+        self.assertFalse(res["ok"])
+
+
 class CreateAndRepointTests(TempTree):
     def test_create_symlink(self):
         t = self.write("t.txt")
