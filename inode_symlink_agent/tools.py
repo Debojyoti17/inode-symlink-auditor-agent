@@ -452,6 +452,11 @@ def _write_flow(action, items, refused, apply_one, dry_run, confirm, auto_confir
 
 
 # --------------------------------------------------------------------------- write tools
+# A symlink is "dead" when resolving it fails: missing target, or a loop (ELOOP, which
+# includes self-links and A -> B -> A). Both can be unlinked.
+_DEAD_REASONS = {"broken": "target missing", "loop": "symlink loop"}
+
+
 def delete_broken_symlinks(paths, dry_run=False, confirm=None, auto_confirm=False):
     if isinstance(paths, str):
         paths = [paths]
@@ -475,25 +480,30 @@ def delete_broken_symlinks(paths, dry_run=False, confirm=None, auto_confirm=Fals
             refused.append({"path": p, "reason": "not a symlink (only symlinks are ever deleted)"})
             continue
         info = link_info(p)
-        if info["status"] != "broken":
-            refused.append({"path": p, "reason": "symlink is not broken (status: %s)"
-                            % info["status"]})
+        if info["status"] not in _DEAD_REASONS:
+            refused.append({"path": p, "reason": "symlink still works (it points to an "
+                            "existing target), so it is not removed"
+                            if info["status"] == "ok" else
+                            "cannot tell whether the symlink is dead (%s)"
+                            % info.get("error", info["status"])})
             continue
         why = safety.check_existing_entry_allowed(p, st)
         if why:
             refused.append({"path": p, "reason": why})
             continue
-        items.append({"path": p, "target": info["target"],
-                      "description": "unlink %s (-> %s, target missing)" % (p, info["target"])})
+        reason = _DEAD_REASONS[info["status"]]
+        items.append({"path": p, "target": info["target"], "reason": reason,
+                      "description": "unlink %s (-> %s, %s)" % (p, info["target"], reason)})
 
     def apply_one(item):
         p = item["path"]
-        try:  # re-check right before deleting: must STILL be a broken symlink
+        try:  # re-check right before deleting: STILL a symlink whose resolution STILL fails
             st = os.lstat(p)
             if not stat.S_ISLNK(st.st_mode):
                 return {"path": p, "done": False, "reason": "no longer a symlink; left alone"}
-            if link_info(p)["status"] != "broken":
-                return {"path": p, "done": False, "reason": "no longer broken; left alone"}
+            if link_info(p)["status"] not in _DEAD_REASONS:
+                return {"path": p, "done": False,
+                        "reason": "no longer broken (it resolves now); left alone"}
             os.unlink(p)
             return {"path": p, "done": True}
         except OSError as exc:

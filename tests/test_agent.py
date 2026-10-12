@@ -588,6 +588,16 @@ class CliTests(TempTree):
         self.assertTrue(cli._is_direct(["suspicious", "x", "--boundary", "y"]))
         self.assertFalse(cli._is_direct(["find broken links"]))
 
+    def test_delete_broken_command_also_removes_loops(self):
+        selfie = self.link("selfie", "selfie")
+        a, b = self.link("b", "a"), self.link("a", "b")
+        code, out = self.run_cli("delete-broken", self.tree, "--yes")
+        for p in (self.b, selfie, a, b):
+            self.assertFalse(os.path.lexists(p), p)
+        self.assertTrue(os.path.islink(self.p("pw")))              # healthy link stays
+        self.assertIn("symlink loop", out)
+        self.assertIn("target missing", out)
+
     def test_bad_path_exit_code(self):
         code, out = self.run_cli("broken", self.p("missing"))
         self.assertEqual(code, 1)

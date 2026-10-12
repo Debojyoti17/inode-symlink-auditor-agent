@@ -119,6 +119,69 @@ class ContextSurvivesTrimmingTests(TempTree):
         self.assertIn('Say "delete them"', sp)
 
 
+class LoopDeletionViaLlmTests(TempTree):
+    def setUp(self):
+        super().setUp()
+        self.selfie = self.link("selfie", "selfie")
+        self.a = self.link("b", "a")
+        self.b = self.link("a", "b")
+
+    def test_find_loops_then_delete_them_in_chat(self):
+        client = FakeClient(
+            tool_call("find_symlink_loops", {"path": self.tree}),
+            text("Found 3 loops. Say \"delete them\" to remove them."),
+            tool_call("delete_broken_symlinks", {"paths": [self.a, self.b, self.selfie]}, "d1"),
+            text("Done."))
+        hist = agent.new_history()
+        agent.handle("any loops in %s?" % self.tree, client=client, history=hist)
+        self.assertIn(self.selfie, hist.context.render())      # "them" is remembered
+        with mock.patch("inode_symlink_agent.safety.is_interactive", return_value=True), \
+                mock.patch("builtins.input", return_value="y") as fake_input, \
+                mock.patch("builtins.print") as fake_print:
+            reply = agent.handle("delete them", client=client, history=hist)
+        fake_input.assert_called_once()                         # the y/N gate ran
+        shown = "\n".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
+        self.assertEqual(shown.count("symlink loop"), 3)        # preview says why, once each
+        self.assertEqual(reply, "Done.")
+        for p in (self.selfie, self.a, self.b):
+            self.assertFalse(os.path.lexists(p))
+        self.assertEqual(hist.context.items, [])                # nothing left to delete
+
+    def test_decline_keeps_loops(self):
+        client = FakeClient(tool_call("delete_broken_symlinks", {"paths": [self.selfie]}))
+        reply = agent.handle("delete them", client=client, confirm=lambda t: False)
+        self.assertEqual(reply, "OK, nothing was deleted.")
+        self.assertTrue(os.path.islink(self.selfie))
+
+    def test_prompt_and_schema_describe_what_the_tools_can_do(self):
+        sp = agent.SYSTEM_PROMPT
+        self.assertIn("find_symlink_loops, then call delete_broken_symlinks", sp)
+        self.assertIn("Offer only what your tools can do", sp)
+        desc = next(s["function"]["description"] for s in agent.get_tool_schemas()
+                    if s["function"]["name"] == "delete_broken_symlinks")
+        self.assertIn("symlink loop", desc)
+
+
+class ReplySpacingTests(unittest.TestCase):
+    def test_missing_space_after_sentence_is_added(self):
+        t = agent.tidy_spacing
+        self.assertEqual(t("Both files are linked (hard-linked).We're done."),
+                         "Both files are linked (hard-linked). We're done.")
+        self.assertEqual(t("Found 2 links.Say \"delete them\"."), "Found 2 links. Say \"delete them\".")
+        self.assertEqual(t("Done!Next step?Please check."), "Done! Next step? Please check.")
+
+    def test_paths_numbers_and_existing_spaces_are_left_alone(self):
+        t = agent.tidy_spacing
+        for s in ("See /tmp/agent10_demo/a.Txt now.", "Version 1.2 is fine.", "~/Desktop/x.Foo",
+                  "Already fine. Next one.", "foo.bar.Baz", "No punctuation here"):
+            self.assertEqual(t(s), s)
+
+    def test_applied_to_model_replies(self):
+        client = FakeClient(text("Two files share an inode (hard-linked).We're done."))
+        self.assertEqual(agent.handle("hi", client=client),
+                         "Two files share an inode (hard-linked). We're done.")
+
+
 class PlainReplyTests(TempTree):
     def setUp(self):
         super().setUp()

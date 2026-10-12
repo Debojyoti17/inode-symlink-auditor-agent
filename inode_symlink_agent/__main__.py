@@ -94,12 +94,14 @@ def _delete_broken(a, path, kw):
         if not found["ok"]:
             print(report.format_result("find_broken_symlinks", found, a.json))
             return 1
+        loops = tools.find_symlink_loops(path, **kw)
         paths = [i["path"] for i in found["broken_symlinks"]]
-        if found["count"] > len(paths):
-            print("Too many broken links (%d); only the first %d are handled per run."
-                  % (found["count"], len(paths)))
+        paths += [i["path"] for i in loops.get("loops", [])]
+        if found["count"] + loops.get("count", 0) > len(paths):
+            print("Too many dead links (%d); only the first %d are handled per run."
+                  % (found["count"] + loops.get("count", 0), len(paths)))
     if not paths:
-        print("No broken symlinks found under %s." % resolved)
+        print("No broken or looping symlinks found under %s." % resolved)
         return 0
     res = tools.delete_broken_symlinks(paths, auto_confirm=a.yes)
     if res["status"] == "not_confirmed" and not safety.is_interactive() and not a.yes:
