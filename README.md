@@ -179,10 +179,31 @@ writes without the y/N prompt.
 
 ## Plugging into a base shell
 
+The class's base shell is not built yet, so the agent is ready for it in two ways:
+
+1. **A fixed contract.** Every agent exposes `AGENT_NAME`, `AGENT_DESCRIPTION` and
+   `handle(prompt, confirm=...)`. The base shell only needs these to find, choose and call it.
+2. **A working example base shell**, `examples/mini_base_shell.py`. It loads the agents listed
+   in `AGENT_MODULES`, routes each request to the best-matching agent (by its description),
+   and calls `handle()` with its own y/N confirmation, keeping a chat history per agent:
+
+```
+$ python3 examples/mini_base_shell.py
+agentic-shell> agents
+- inode_symlink_auditor: Inode & Symlink Auditor: finds and cleans up broken (dangling) ...
+agentic-shell> find broken shortcuts in /tmp/agent10_demo/desktop
+[shell] -> inode_symlink_auditor
+...
+agentic-shell> exit
+```
+
+When the real base shell exists, adding this agent is one line (`"inode_symlink_agent"` in its
+list of agents); its router can be smarter (for example an LLM that reads every
+`AGENT_DESCRIPTION`), but the call stays the same. The API in detail:
+
 ```python
 from inode_symlink_agent import (AGENT_NAME, AGENT_DESCRIPTION,
-                                 get_tool_schemas, call_tool, handle)
-from inode_symlink_agent.agent import new_history
+                                 get_tool_schemas, call_tool, handle, new_history)
 
 AGENT_NAME            # "inode_symlink_auditor"
 AGENT_DESCRIPTION     # paragraph for the router LLM, with example requests
@@ -207,7 +228,8 @@ reply = handle("audit my projects folder", confirm=my_confirm_callback)
 ## Files
 
 ```
-inode_symlink_agent/  tools.py schemas.py safety.py llm.py agent.py report.py __main__.py
+inode_symlink_agent/  tools.py schemas.py safety.py llm.py agent.py context.py report.py __main__.py
+examples/             mini_base_shell.py (a working stand-in for the class base shell)
 tests/                unittest suite (temp dirs, fake LLM, local HTTP stub; no network)
 demo/                 make_demo.sh run_demo.sh cleanup.sh DEMO_SCRIPT.md
 .env.example

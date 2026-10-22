@@ -57,11 +57,23 @@ safety gate."
 
 ## D. Safety without an LLM (1 min, fallback if the network or LLM misbehaves)
 `./demo/make_demo.sh`, then `python3 -m inode_symlink_agent delete-broken /tmp/agent10_demo/desktop`
-**See:** the same preview and y/N prompt. Type `n`, then run `broken` to show nothing changed.
+**See:** a preview of 5 links (2 with a missing target, 3 symlink loops), each with the reason,
+and the y/N prompt. Type `n`, then run `broken` to show nothing changed.
 **Say:** "Direct mode needs no LLM. Called from another program, it never writes unless the
 caller confirms."
 
-## E. Wrap up (30 s)
+## E. How it plugs into the base shell (1 min)
+**Say:** "Sir asked the students to build the base shell later, so our agent is ready for it.
+Any base shell only needs three things from us: AGENT_NAME, AGENT_DESCRIPTION and handle()."
+1. `python3 examples/mini_base_shell.py` (prompt: `agentic-shell>`). Type `agents`.
+   **See:** our agent listed with its description; this is what a base shell reads to route.
+2. `agentic-shell> are there symlink loops in /tmp/agent10_demo/desktop?` (needs the key)
+   **See:** `[shell] -> inode_symlink_auditor`, then our agent's answer.
+3. `agentic-shell> open firefox` **See:** "no agent matches", because no such agent is loaded.
+   **Say:** "Adding our agent to the real base shell is one line in its agent list; any change
+   is still confirmed with y/N through the base shell's own callback."
+
+## F. Wrap up (30 s)
 `python3 -m unittest discover -s tests` -> all green. `./demo/cleanup.sh`.
 **Say:** "For the base shell: import `AGENT_DESCRIPTION`, `get_tool_schemas`, `call_tool`
 and `handle`. Standard library only. Developed with AI assistance (Claude), as the course permits."
