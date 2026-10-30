@@ -70,12 +70,15 @@ def load_dotenv(paths=None):
 
 
 class ChatClient:
-    def __init__(self, base_url, api_key, model, timeout=60, verbose=False):
+    def __init__(self, base_url, api_key, model, timeout=60, verbose=False,
+                 reasoning_effort=None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
         self.verbose = verbose
+        # Optional, e.g. "low" for Groq's gpt-oss models: fewer thinking tokens, faster
+        self.reasoning_effort = reasoning_effort or None
         self.max_retries = MAX_RETRIES
         self.max_total_wait = MAX_TOTAL_WAIT
         self.sleep = time.sleep                                   # replaced in tests
@@ -93,7 +96,8 @@ class ChatClient:
                 "No LLM API key is set (AGENT_LLM_API_KEY). Natural-language mode needs one. "
                 "See README.md / .env.example, or use direct mode that needs no LLM, e.g.: "
                 "python3 -m inode_symlink_agent broken ~/Desktop")
-        return cls(base, key or "none", model, timeout, verbose)
+        return cls(base, key or "none", model, timeout, verbose,
+                   os.environ.get("AGENT_LLM_REASONING_EFFORT", "").strip() or None)
 
     def chat(self, messages, tools=None):
         """Send one request; return the assistant message dict.
@@ -102,6 +106,8 @@ class ChatClient:
         waiting as long as the server asks.
         """
         body = {"model": self.model, "messages": messages}
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

@@ -1,9 +1,10 @@
 """Agent loop and the public API a base shell can import."""
 import inspect
 import json
+import os
 import re
 
-from . import tools
+from . import report, tools
 from .context import SessionContext
 from .llm import ChatClient, LLMError, LLMNotConfigured
 from .schemas import SCHEMAS, get_tool_schemas
@@ -135,6 +136,11 @@ class History(list):
         self.context = SessionContext()
 
 
+def _fast_ok(result):
+    """A result the program can report by itself (anything else goes back to the LLM)."""
+    return bool(result.get("ok")) or result.get("status") in ("not_confirmed", "nothing_to_do")
+
+
 def new_history():
     """A fresh conversation for chat mode: pass it to handle(..., history=...) each turn."""
     return History([{"role": "system", "content": SYSTEM_PROMPT}])
@@ -180,8 +186,15 @@ def scrub_internal_names(text):
     return _PLAIN_RE.sub(lambda m: _PLAIN_NAMES[m.group(1)], text)
 
 
+FAST_REPLY_HISTORY_CHARS = 1500   # how much of a fast reply is kept in the chat history
+
+
+def fast_mode_from_env():
+    return os.environ.get("AGENT_FAST", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def handle(prompt, confirm=None, client=None, auto_confirm=False, on_tool_call=None,
-           history=None, verbose=False):
+           history=None, verbose=False, fast=None):
     """Answer a plain-English request. Returns the reply text.
 
     confirm(preview_text) -> bool is asked before any write. Without it (and without
@@ -189,7 +202,12 @@ def handle(prompt, confirm=None, client=None, auto_confirm=False, on_tool_call=N
     `client` is any object with chat(messages, tools) -> message dict (used by tests).
     `history` (from new_history()) keeps the conversation between calls, so follow-ups
     like "yes, delete them" work; without it every call is a fresh one-shot request.
+    `fast=True` (or AGENT_FAST=1) answers with the program's own report of the tool result
+    instead of a second LLM call: half the tokens and waiting on rate-limited free tiers.
+    If a tool fails, the LLM is still asked so it can correct itself.
     """
+    if fast is None:
+        fast = fast_mode_from_env()
     if not isinstance(prompt, str) or not prompt.strip():
         return "Please tell me what you would like to check, e.g. 'find broken links in ~/Desktop'."
     try:
@@ -215,6 +233,7 @@ def handle(prompt, confirm=None, client=None, auto_confirm=False, on_tool_call=N
                 return text
             messages.append(msg)
             declined = None
+            batch = []
             for call in calls:
                 fn = call.get("function", {})
                 name, args = fn.get("name", ""), fn.get("arguments", "{}")
@@ -230,12 +249,19 @@ def handle(prompt, confirm=None, client=None, auto_confirm=False, on_tool_call=N
                         ctx.update(name, args, result)
                     if result.get("declined"):
                         declined = _DECLINED_TEXT.get(name, "OK, nothing was changed.")
+                    batch.append((name, result))
                 messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                                  "content": _encode(result)})
             if declined:      # the user said no at the y/N prompt: no need to ask the model
                 messages.append({"role": "assistant", "content": declined})
                 _trim_history(messages)
                 return declined
+            if fast and batch and len(batch) == len(calls) and all(_fast_ok(r) for _, r in batch):
+                text = "\n\n".join(report.format_result(n, r) for n, r in batch).strip()
+                messages.append({"role": "assistant",
+                                 "content": text[:FAST_REPLY_HISTORY_CHARS]})
+                _trim_history(messages)
+                return text
         del messages[start:]
         return "I could not finish within the tool-call limit. Try a more specific request."
     except LLMError as exc:

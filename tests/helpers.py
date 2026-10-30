@@ -24,6 +24,11 @@ class TempTree(unittest.TestCase):
         os.mkdir(self.tree)
         # Tests must behave identically with or without a real terminal: force
         # non-interactive mode, and fail loudly if anything ever tries to prompt.
+        env = mock.patch.dict(os.environ)             # restore the environment afterwards
+        env.start()
+        self.addCleanup(env.stop)
+        for var in ("AGENT_FAST", "AGENT_LLM_REASONING_EFFORT"):
+            os.environ.pop(var, None)                 # a developer's shell must not change tests
         patches = [mock.patch("inode_symlink_agent.safety.is_interactive", return_value=False),
                    mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt"))]
         for patch in patches:

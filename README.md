@@ -78,7 +78,8 @@ python3 -m inode_symlink_agent delete-broken /tmp/agent10_demo/desktop   # asks 
 
 Commands: `scan PATH | broken PATH | loops PATH | hardlinks PATH | inodes PATH |
 suspicious PATH [--boundary DIR] | inspect PATH | delete-broken PATH [--yes]`.
-Add `--json` for JSON output. Other options: `--no-recursive --max-depth N --max-entries N`.
+Add `--json` for JSON output. Other options: `--no-recursive --max-depth N --max-entries N`,
+and `--fast` for chat mode (see below).
 
 ### Natural-language mode (needs an LLM)
 
@@ -158,6 +159,14 @@ What the agent does about it:
   the LLM (with a count of the rest; write previews and direct mode always show everything),
   and chat mode remembers only the last 6 turns, keeping tool output for the latest 2.
 - A write request needs a single tool call (no extra dry run), and the program asks y/N itself.
+
+**Faster on the free tier:** start chat mode with `--fast`
+(`python3 -m inode_symlink_agent --fast`, or `export AGENT_FAST=1`). The agent then answers with
+its own report of the tool result instead of asking the LLM a second time, so each request needs
+one LLM call instead of two: about half the tokens and half the waiting. If a tool fails, the LLM
+is still asked so it can correct itself. With Groq's gpt-oss models you can also cut the model's
+hidden "thinking" tokens with `export AGENT_LLM_REASONING_EFFORT=low` (leave it unset for other
+models; if the provider rejects it, run `unset AGENT_LLM_REASONING_EFFORT`).
 
 Tips: wait a few seconds between requests, and use `--verbose` (for example
 `python3 -m inode_symlink_agent --verbose`) to see the approximate number of tokens sent with

@@ -262,7 +262,7 @@ class ChatModeTests(TempTree):
     def test_no_arguments_starts_chat(self):
         with mock.patch.object(cli, "run_chat", return_value=0) as rc:
             self.assertEqual(cli.main([]), 0)
-        rc.assert_called_once_with(auto_confirm=False, verbose=False)
+        rc.assert_called_once_with(auto_confirm=False, verbose=False, fast=None)
 
     @staticmethod
     def _turn(hist, i):

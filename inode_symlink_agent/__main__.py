@@ -21,7 +21,7 @@ Direct mode (no LLM needed):
   python3 -m inode_symlink_agent scan|broken|loops|hardlinks|inodes|inspect|delete-broken PATH
   python3 -m inode_symlink_agent suspicious PATH [--boundary DIR]
 
-Options: --json  --yes  --verbose  --no-recursive  --max-depth N  --max-entries N
+Options: --json  --yes  --verbose  --fast  --no-recursive  --max-depth N  --max-entries N
 """
 
 
@@ -45,6 +45,9 @@ def _build_parser():
                                 description="Inode & Symlink Auditor (Agent 10)")
     p.add_argument("words", nargs="*", help="a COMMAND and PATH, or a plain-English request")
     p.add_argument("--json", action="store_true", help="print JSON instead of a report")
+    p.add_argument("--fast", action="store_true",
+                   help="answer with the program's report instead of a second LLM call "
+                        "(fewer tokens; same as AGENT_FAST=1)")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="print approximate tokens sent per LLM request")
     p.add_argument("--yes", "-y", action="store_true", help="auto-confirm writes")
@@ -114,7 +117,7 @@ def _trace(name, args):
     print("[tool] %s %s" % (name, args), file=sys.stderr)
 
 
-def run_chat(client=None, input_fn=input, auto_confirm=False, verbose=False):
+def run_chat(client=None, input_fn=input, auto_confirm=False, verbose=False, fast=None):
     """Interactive loop. Conversation history is kept between turns; every write still
     goes through the y/N confirmation gate."""
     if client is None:
@@ -145,7 +148,7 @@ def run_chat(client=None, input_fn=input, auto_confirm=False, verbose=False):
         if line.lower() in ("exit", "quit", ":q"):
             return 0
         try:
-            print(agent.handle(line, client=client, auto_confirm=auto_confirm,
+            print(agent.handle(line, client=client, auto_confirm=auto_confirm, fast=fast,
                                on_tool_call=_trace, history=history))
         except KeyboardInterrupt:
             print("\n(interrupted)")
@@ -155,11 +158,12 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     a = _build_parser().parse_args(argv)
     if not a.words:
-        return run_chat(auto_confirm=a.yes, verbose=a.verbose)
+        return run_chat(auto_confirm=a.yes, verbose=a.verbose, fast=a.fast or None)
     if _is_direct(argv):
         return _direct(a)
     prompt = " ".join(a.words)
-    print(agent.handle(prompt, auto_confirm=a.yes, on_tool_call=_trace, verbose=a.verbose))
+    print(agent.handle(prompt, auto_confirm=a.yes, on_tool_call=_trace, verbose=a.verbose,
+                       fast=a.fast or None))
     return 0
 
 
